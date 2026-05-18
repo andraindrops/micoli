@@ -1,126 +1,75 @@
-#!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import type { ModelMessage } from "ai";
-import { Box, render, Text, useInput } from "ink";
+import type { ModelMessage as HistoryForDataEntry } from "ai";
+import { Box, render, Text } from "ink";
 import TextInput from "ink-text-input";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { send } from "./lib/llm.js";
-import { createExecTools } from "./tools/exec.js";
-import { fileTools } from "./tools/file.js";
-import { webTools } from "./tools/web.js";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { send } from "./lib/llm";
+import { createExecTools, createFileTools, createWebTools } from "./tool";
 
-function loadAgentsMd(): string | undefined {
-  try {
-    return readFileSync(resolve(process.cwd(), "AGENTS.md"), "utf-8");
-  } catch {
-    return undefined;
-  }
-}
-
-type LogEntry = {
-  type: "user" | "assistant" | "reasoning" | "tool" | "output" | "error";
+type HistoryForViewEntry = {
+  type: "user" | "assistant" | "reasoning" | "tool-req" | "tool-res" | "error";
   text: string;
 };
 
+const ENTRY_TYPE_REQ = "user";
+const ENTRY_TYPE_RES = "assistant";
+
 function App() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [history, setHistory] = useState<ModelMessage[]>([]);
+  const [historyForView, setHistoryForView] = useState<HistoryForViewEntry[]>(
+    [],
+  );
+  const [historyForData, setHistoryForData] = useState<HistoryForDataEntry[]>(
+    [],
+  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [chatOutput, setChatOutput] = useState("");
-  const [toolOutput, setToolOutput] = useState("");
   const [status, setStatus] = useState("");
-  const [confirmPrompt, setConfirmPrompt] = useState<string | null>(null);
-  const [confirmSelected, setConfirmSelected] = useState<"yes" | "no">("yes");
-  const confirmResolveRef = useRef<((approved: boolean) => void) | null>(null);
-  const [charOffset, setCharOffset] = useState<number | null>(null);
-  const [systemPrompt] = useState(() => loadAgentsMd());
+  const [streamingReasoning, setStreamingReasoning] = useState("");
 
-  useEffect(() => {
-    const cols = process.stdout.columns || 80;
-    const charWidth = 8;
-    const startOffset = Math.max(0, Math.floor((cols - charWidth) / 2));
-    setCharOffset(startOffset);
+  const appendHistoryForView = useCallback(
+    ({ entries }: { entries: HistoryForViewEntry[] }) => {
+      setHistoryForView((prev) => [...prev, ...entries]);
+    },
+    [],
+  );
 
-    let current = startOffset;
-    const timer = setInterval(() => {
-      current -= 2;
-      if (current <= 0) {
-        current = 0;
-        clearInterval(timer);
-      }
-      setCharOffset(current);
-    }, 50);
+  const appendHistoryForData = useCallback(
+    ({ entries }: { entries: HistoryForDataEntry[] }) => {
+      setHistoryForData((prev) => [...prev, ...entries]);
+    },
+    [],
+  );
 
-    return () => clearInterval(timer);
-  }, []);
+  const appendStreamingReasoning = useCallback(
+    ({ delta }: { delta: string }) => {
+      setStreamingReasoning((prev) => prev + delta);
+    },
+    [],
+  );
 
-  const confirmExec = useCallback((command: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      confirmResolveRef.current = resolve;
-      setConfirmPrompt(command);
-      setConfirmSelected("yes");
-    });
-  }, []);
-
-  useInput((_input, key) => {
-    if (confirmPrompt == null) return;
-
-    if (key.leftArrow || key.rightArrow) {
-      setConfirmSelected((prev) => (prev === "yes" ? "no" : "yes"));
-    }
-
-    if (key.return) {
-      const resolve = confirmResolveRef.current;
-      confirmResolveRef.current = null;
-      setConfirmPrompt(null);
-      resolve?.(confirmSelected === "yes");
-    }
-  });
-
-  const flushChatOutput = useCallback(() => {
-    setChatOutput((prev) => {
+  const commitStreamingReasoning = useCallback(() => {
+    setStreamingReasoning((prev) => {
       if (prev !== "") {
-        setLogs((logs) => [...logs, { type: "reasoning", text: prev }]);
+        setHistoryForView((prevHistory) => [
+          ...prevHistory,
+          { type: "reasoning", text: prev },
+        ]);
       }
       return "";
     });
   }, []);
 
-  const flushToolOutput = useCallback(() => {
-    setToolOutput((prev) => {
-      if (prev !== "") {
-        setLogs((logs) => [...logs, { type: "output", text: prev }]);
-      }
-      return "";
-    });
-  }, []);
-
-  const addLog = useCallback((entry: LogEntry) => {
-    setLogs((prev) => [...prev, entry]);
-  }, []);
-
-  const historyRef = useRef(history);
-  historyRef.current = history;
-
-  const setToolOutputRef = useRef(setToolOutput);
-  setToolOutputRef.current = setToolOutput;
+  const historyForDataRef = useRef(historyForData);
+  historyForDataRef.current = historyForData;
 
   const tools = useMemo(
     () => ({
-      ...fileTools,
-      ...createExecTools({
-        onStdout: (chunk) => setToolOutputRef.current((prev) => prev + chunk),
-        onStderr: (chunk) => setToolOutputRef.current((prev) => prev + chunk),
-        confirm: confirmExec,
-      }),
-      ...webTools,
+      ...createFileTools(),
+      ...createExecTools(),
+      ...createWebTools(),
     }),
-    [confirmExec],
+    [],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: ignore
   const handleSubmit = useCallback(
     async (value: string) => {
       if (value.trim() === "" || loading) return;
@@ -129,59 +78,90 @@ function App() {
         process.exit(0);
       }
 
-      setInput("");
-      addLog({ type: "user", text: value });
-      setLoading(true);
-      setChatOutput("");
-      setToolOutput("");
-      setStatus("thinking...");
-
       try {
-        const userMessage: ModelMessage = { role: "user", content: value };
-        const messages: ModelMessage[] = [...historyRef.current, userMessage];
+        setInput("");
 
-        const { text, responseMessages } = await send({
-          messages,
-          system: systemPrompt,
-          onReasoningDelta: (delta) => {
+        setLoading(true);
+
+        setStatus("thinking...");
+
+        setStreamingReasoning("");
+
+        appendHistoryForView({
+          entries: [{ type: ENTRY_TYPE_REQ, text: value }],
+        });
+
+        const reqMessage: HistoryForDataEntry = {
+          role: ENTRY_TYPE_REQ,
+          content: value,
+        };
+
+        const { text, responseMessages: resMessages } = await send({
+          messages: [...historyForDataRef.current, reqMessage],
+          onReasoningDelta: (d) => {
             setStatus("");
-            setChatOutput((prev) => prev + delta);
+
+            appendStreamingReasoning({ delta: d });
           },
-          onToolCall: ({ toolName, args }) => {
-            flushChatOutput();
-            flushToolOutput();
-            addLog({
-              type: "tool",
-              text: `[tool] ${toolName} ${JSON.stringify(args)}`,
-            });
+          onToolReq: ({ toolName, args }) => {
             setStatus(`running ${toolName}...`);
+
+            commitStreamingReasoning();
+
+            appendHistoryForView({
+              entries: [
+                {
+                  type: "tool-req",
+                  text: `[tool-req] ${toolName} ${JSON.stringify(args)}`,
+                },
+              ],
+            });
           },
-          onToolResult: ({ toolName, result }) => {
-            flushToolOutput();
-            addLog({
-              type: "output",
-              text: `[${toolName}] ${JSON.stringify(result, null, 2)}`,
+          onToolRes: ({ toolName, result }) => {
+            appendHistoryForView({
+              entries: [
+                {
+                  type: "tool-res",
+                  text: `[tool-res] ${toolName} ${JSON.stringify(result, null, 2)}`,
+                },
+              ],
             });
           },
           tools,
         });
-        flushChatOutput();
-        flushToolOutput();
-        addLog({ type: "assistant", text });
-        setHistory((prev) => [...prev, userMessage, ...responseMessages]);
+
+        commitStreamingReasoning();
+
+        appendHistoryForView({
+          entries: [{ type: ENTRY_TYPE_RES, text }],
+        });
+
+        appendHistoryForData({
+          entries: [reqMessage, ...resMessages],
+        });
       } catch (err) {
-        addLog({
-          type: "error",
-          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        appendHistoryForView({
+          entries: [
+            {
+              type: "error",
+              text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
         });
       } finally {
-        setChatOutput("");
-        setToolOutput("");
         setStatus("");
+        setStreamingReasoning("");
         setLoading(false);
       }
     },
-    [loading, addLog, flushChatOutput, flushToolOutput, tools],
+    [
+      loading,
+      appendHistoryForData,
+      appendHistoryForView,
+      appendStreamingReasoning,
+      commitStreamingReasoning,
+      tools,
+    ],
   );
 
   return (
@@ -192,23 +172,9 @@ function App() {
         borderColor="#8BE9FD"
         paddingX={1}
       >
-        {logs.length === 0 ? (
-          <Box flexDirection="column">
-            <Box marginLeft={charOffset ?? 0}>
-              <Text bold color="#8BE9FD">
-                {
-                  "██                    ██\n████                ████\n██████            ██████\n████████████████████████\n████  ████████████  ████\n████  ████████████  ████\n████████████████████████\n████████████████████████\n██████    ████    ██████\n██████            ██████\n████████████████████████\n████████████████████████"
-                }
-              </Text>
-            </Box>
-            <Text> </Text>
-            <Text bold color="#8BE9FD">
-              micoli
-            </Text>
-          </Box>
-        ) : (
+        {historyForView.length > 0 &&
           // biome-ignore lint/suspicious/useIterableCallbackReturn: ignore
-          logs.map((log, i) => {
+          historyForView.map((log, i) => {
             const key = `${i}`;
             switch (log.type) {
               case "user":
@@ -229,15 +195,15 @@ function App() {
                     {log.text}
                   </Text>
                 );
-              case "output":
+              case "tool-req":
                 return (
-                  <Text key={key} color="#BD93F9" dimColor>
+                  <Text key={key} color="#F1FA8C" dimColor>
                     {log.text}
                   </Text>
                 );
-              case "tool":
+              case "tool-res":
                 return (
-                  <Text key={key} color="#F1FA8C" dimColor>
+                  <Text key={key} color="#BD93F9" dimColor>
                     {log.text}
                   </Text>
                 );
@@ -248,53 +214,29 @@ function App() {
                   </Text>
                 );
             }
-          })
-        )}
-        {chatOutput !== "" && (
+          })}
+        {streamingReasoning !== "" && (
           <Text color="#6272A4" dimColor>
-            {chatOutput}
+            {streamingReasoning}
           </Text>
         )}
-        {toolOutput !== "" && (
-          <Text color="#BD93F9" dimColor>
-            {toolOutput}
+        {status !== "" && (
+          <Text color="#F1FA8C" dimColor>
+            {status}
           </Text>
         )}
-        {status !== "" && <Text color="#F1FA8C">{status}</Text>}
       </Box>
-      {confirmPrompt != null ? (
-        <Box paddingX={1} flexDirection="column">
-          <Text color="#FFB86C">
-            Run command: <Text bold>{confirmPrompt}</Text>
-          </Text>
-          <Box gap={2}>
-            <Text
-              color={confirmSelected === "yes" ? "#50FA7B" : "#6272A4"}
-              bold={confirmSelected === "yes"}
-            >
-              {confirmSelected === "yes" ? "▸ " : "  "}yes
-            </Text>
-            <Text
-              color={confirmSelected === "no" ? "#FF5555" : "#6272A4"}
-              bold={confirmSelected === "no"}
-            >
-              {confirmSelected === "no" ? "▸ " : "  "}no
-            </Text>
-          </Box>
-        </Box>
-      ) : (
-        <Box paddingX={1}>
-          <Text color="#8BE9FD" bold>
-            {">"}{" "}
-          </Text>
-          <TextInput
-            value={input}
-            onChange={setInput}
-            onSubmit={handleSubmit}
-            placeholder="Type a message... (/exit to quit)"
-          />
-        </Box>
-      )}
+      <Box paddingX={1}>
+        <Text color="#8BE9FD" bold>
+          {">"}{" "}
+        </Text>
+        <TextInput
+          value={input}
+          onChange={setInput}
+          onSubmit={handleSubmit}
+          placeholder="Type a message... (/exit to quit)"
+        />
+      </Box>
     </Box>
   );
 }

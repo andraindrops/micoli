@@ -17,21 +17,19 @@
   },
   "scripts": {
     "lint": "biome check .",
-    "test": "vitest run",
+    "test": "bun test",
     "format": "biome check --fix .",
-    "start": "dotenvx run --env-file=.env -- tsx src/index.tsx",
+    "start": "bun --env-file=.env src/index.tsx",
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
-    "@dotenvx/dotenvx": "^1.40.1",
+    "@types/bun": "^1.3.14",
     "@types/json-schema": "^7.0.15",
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.14",
-    "msw": "^2.12.13",
-    "tsx": "^4.19.0",
-    "vitest": "^3.2.1"
+    "msw": "^2.12.13"
   },
   "peerDependencies": {
     "typescript": "^5"

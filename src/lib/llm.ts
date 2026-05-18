@@ -23,8 +23,8 @@ export type SendOptions = {
   messages?: ModelMessage[];
   model?: LanguageModel;
   onReasoningDelta?: (delta: string) => void;
-  onToolCall?: (event: { toolName: string; args: unknown }) => void;
-  onToolResult?: (event: { toolName: string; result: unknown }) => void;
+  onToolReq?: (event: { toolName: string; args: unknown }) => void;
+  onToolRes?: (event: { toolName: string; result: unknown }) => void;
   prompt?: string;
   stopWhen?: StopCondition<ToolSet> | StopCondition<ToolSet>[];
   system?: string;
@@ -38,8 +38,8 @@ export async function send({
   messages,
   model,
   onReasoningDelta,
-  onToolCall,
-  onToolResult,
+  onToolReq,
+  onToolRes,
   prompt,
   stopWhen,
   system,
@@ -54,8 +54,8 @@ export async function send({
       ...input,
       maxRetries,
       model: resolvedModel,
-      onToolCall,
-      onToolResult,
+      onToolReq,
+      onToolRes,
       stopWhen,
       system,
       temperature,
@@ -72,11 +72,11 @@ export async function send({
       if (chunk.type === "reasoning-delta") {
         onReasoningDelta(chunk.text);
       }
-      if (chunk.type === "tool-call" && onToolCall) {
-        onToolCall({ toolName: chunk.toolName, args: chunk.input });
+      if (chunk.type === "tool-call" && onToolReq) {
+        onToolReq({ toolName: chunk.toolName, args: chunk.input });
       }
-      if (chunk.type === "tool-result" && onToolResult) {
-        onToolResult({ toolName: chunk.toolName, result: chunk.output });
+      if (chunk.type === "tool-result" && onToolRes) {
+        onToolRes({ toolName: chunk.toolName, result: chunk.output });
       }
     },
     stopWhen: stopWhen ?? stepCountIs(10),
@@ -101,8 +101,8 @@ async function generateResult({
   maxRetries,
   messages,
   model,
-  onToolCall,
-  onToolResult,
+  onToolReq,
+  onToolRes,
   prompt,
   stopWhen,
   system,
@@ -112,8 +112,8 @@ async function generateResult({
   maxRetries?: number;
   messages?: ModelMessage[];
   model: LanguageModel;
-  onToolCall?: (event: { toolName: string; args: unknown }) => void;
-  onToolResult?: (event: { toolName: string; result: unknown }) => void;
+  onToolReq?: (event: { toolName: string; args: unknown }) => void;
+  onToolRes?: (event: { toolName: string; result: unknown }) => void;
   prompt?: string;
   stopWhen?: StopCondition<ToolSet> | StopCondition<ToolSet>[];
   system?: string;
@@ -127,14 +127,14 @@ async function generateResult({
     model,
     system,
     onStepFinish({ toolCalls, toolResults }) {
-      if (onToolCall) {
+      if (onToolReq) {
         for (const tc of toolCalls) {
-          onToolCall({ toolName: tc.toolName, args: tc.input });
+          onToolReq({ toolName: tc.toolName, args: tc.input });
         }
       }
-      if (onToolResult) {
+      if (onToolRes) {
         for (const tr of toolResults) {
-          onToolResult({ toolName: tr.toolName, result: tr.output });
+          onToolRes({ toolName: tr.toolName, result: tr.output });
         }
       }
     },
