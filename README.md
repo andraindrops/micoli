@@ -14,7 +14,6 @@ Get your API key at [openrouter.ai/keys](https://openrouter.ai/keys).
 ### Requirements
 
 - `Node.js`
-- `Docker`
 - `ripgrep`
 
 ## Features
