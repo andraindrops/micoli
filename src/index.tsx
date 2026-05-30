@@ -2,11 +2,12 @@ import type { ModelMessage } from "ai";
 import { Box, render, Text } from "ink";
 import TextInput from "ink-text-input";
 import { useCallback, useMemo, useRef, useState } from "react";
+
 import { send } from "./lib/llm";
 import { createExecTools, createFileTools, createWebTools } from "./tool";
 
 const ENTRY_TYPE_REQ = "user";
-type Status = "" | "running";
+type Status = "running";
 
 function getMessageText(content: ModelMessage["content"]): string {
   if (typeof content === "string") return content;
@@ -19,7 +20,7 @@ function getMessageText(content: ModelMessage["content"]): string {
 
 function App() {
   const [modelMessages, setModelMessages] = useState<ModelMessage[]>([]);
-  const [status, setStatus] = useState<Status>("");
+  const [status, setStatus] = useState<Status | undefined>(undefined);
 
   const [input, setInput] = useState("");
 
@@ -44,7 +45,7 @@ function App() {
 
   const handleSubmit = useCallback(
     async (value: string) => {
-      if (value.trim() === "" || status !== "") return;
+      if (value.trim() === "" || status != null) return;
 
       if (value.trim() === "/exit") {
         process.exit(0);
@@ -69,7 +70,7 @@ function App() {
           entries: [reqMessage, ...resMessages],
         });
       } finally {
-        setStatus("");
+        setStatus(undefined);
       }
     },
     [status, appendModelMessages, tools],
@@ -83,18 +84,18 @@ function App() {
         borderColor="#8BE9FD"
         paddingX={1}
       >
-        {status !== "" && (
-          <Text color="#F1FA8C" dimColor>
-            {status}
-          </Text>
-        )}
+        <Text color="#F1FA8C" dimColor>
+          {status || "hello"}
+        </Text>
         {modelMessages.length > 0 &&
           // biome-ignore lint/suspicious/useIterableCallbackReturn: ignore
           modelMessages.map((message, i) => {
             const text = getMessageText(message.content);
+
             if (text === "") return null;
 
             const key = `${i}`;
+
             switch (message.role) {
               case "user":
                 return (
