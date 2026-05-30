@@ -1,65 +1,37 @@
-import type { ModelMessage as HistoryForDataEntry } from "ai";
+import type { ModelMessage } from "ai";
 import { Box, render, Text } from "ink";
 import TextInput from "ink-text-input";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { send } from "./lib/llm";
 import { createExecTools, createFileTools, createWebTools } from "./tool";
 
-type HistoryForViewEntry = {
-  type: "user" | "assistant" | "reasoning" | "tool-req" | "tool-res" | "error";
-  text: string;
-};
-
 const ENTRY_TYPE_REQ = "user";
-const ENTRY_TYPE_RES = "assistant";
+type Status = "" | "running";
+
+function getMessageText(content: ModelMessage["content"]): string {
+  if (typeof content === "string") return content;
+
+  return content
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .filter((text) => text.trim() !== "")
+    .join("\n");
+}
 
 function App() {
-  const [historyForView, setHistoryForView] = useState<HistoryForViewEntry[]>(
-    [],
-  );
-  const [historyForData, setHistoryForData] = useState<HistoryForDataEntry[]>(
-    [],
-  );
+  const [modelMessages, setModelMessages] = useState<ModelMessage[]>([]);
+  const [status, setStatus] = useState<Status>("");
+
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
-  const [streamingReasoning, setStreamingReasoning] = useState("");
 
-  const appendHistoryForView = useCallback(
-    ({ entries }: { entries: HistoryForViewEntry[] }) => {
-      setHistoryForView((prev) => [...prev, ...entries]);
+  const appendModelMessages = useCallback(
+    ({ entries }: { entries: ModelMessage[] }) => {
+      setModelMessages((prev) => [...prev, ...entries]);
     },
     [],
   );
 
-  const appendHistoryForData = useCallback(
-    ({ entries }: { entries: HistoryForDataEntry[] }) => {
-      setHistoryForData((prev) => [...prev, ...entries]);
-    },
-    [],
-  );
-
-  const appendStreamingReasoning = useCallback(
-    ({ delta }: { delta: string }) => {
-      setStreamingReasoning((prev) => prev + delta);
-    },
-    [],
-  );
-
-  const commitStreamingReasoning = useCallback(() => {
-    setStreamingReasoning((prev) => {
-      if (prev !== "") {
-        setHistoryForView((prevHistory) => [
-          ...prevHistory,
-          { type: "reasoning", text: prev },
-        ]);
-      }
-      return "";
-    });
-  }, []);
-
-  const historyForDataRef = useRef(historyForData);
-  historyForDataRef.current = historyForData;
+  const modelMessagesRef = useRef(modelMessages);
+  modelMessagesRef.current = modelMessages;
 
   const tools = useMemo(
     () => ({
@@ -72,96 +44,35 @@ function App() {
 
   const handleSubmit = useCallback(
     async (value: string) => {
-      if (value.trim() === "" || loading) return;
+      if (value.trim() === "" || status !== "") return;
 
       if (value.trim() === "/exit") {
         process.exit(0);
       }
 
       try {
+        setStatus("running");
+
         setInput("");
 
-        setLoading(true);
-
-        setStatus("thinking...");
-
-        setStreamingReasoning("");
-
-        appendHistoryForView({
-          entries: [{ type: ENTRY_TYPE_REQ, text: value }],
-        });
-
-        const reqMessage: HistoryForDataEntry = {
+        const reqMessage: ModelMessage = {
           role: ENTRY_TYPE_REQ,
           content: value,
         };
 
-        const { text, responseMessages: resMessages } = await send({
-          messages: [...historyForDataRef.current, reqMessage],
-          onReasoningDelta: (d) => {
-            setStatus("");
-
-            appendStreamingReasoning({ delta: d });
-          },
-          onToolReq: ({ toolName, args }) => {
-            setStatus(`running ${toolName}...`);
-
-            commitStreamingReasoning();
-
-            appendHistoryForView({
-              entries: [
-                {
-                  type: "tool-req",
-                  text: `[tool-req] ${toolName} ${JSON.stringify(args)}`,
-                },
-              ],
-            });
-          },
-          onToolRes: ({ toolName, result }) => {
-            appendHistoryForView({
-              entries: [
-                {
-                  type: "tool-res",
-                  text: `[tool-res] ${toolName} ${JSON.stringify(result, null, 2)}`,
-                },
-              ],
-            });
-          },
+        const { responseMessages: resMessages } = await send({
+          messages: [...modelMessagesRef.current, reqMessage],
           tools,
         });
 
-        commitStreamingReasoning();
-
-        appendHistoryForView({
-          entries: [{ type: ENTRY_TYPE_RES, text }],
-        });
-
-        appendHistoryForData({
+        appendModelMessages({
           entries: [reqMessage, ...resMessages],
-        });
-      } catch (err) {
-        appendHistoryForView({
-          entries: [
-            {
-              type: "error",
-              text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
         });
       } finally {
         setStatus("");
-        setStreamingReasoning("");
-        setLoading(false);
       }
     },
-    [
-      loading,
-      appendHistoryForData,
-      appendHistoryForView,
-      appendStreamingReasoning,
-      commitStreamingReasoning,
-      tools,
-    ],
+    [status, appendModelMessages, tools],
   );
 
   return (
@@ -172,59 +83,39 @@ function App() {
         borderColor="#8BE9FD"
         paddingX={1}
       >
-        {historyForView.length > 0 &&
-          // biome-ignore lint/suspicious/useIterableCallbackReturn: ignore
-          historyForView.map((log, i) => {
-            const key = `${i}`;
-            switch (log.type) {
-              case "user":
-                return (
-                  <Text key={key} color="#50FA7B">
-                    {">"} {log.text}
-                  </Text>
-                );
-              case "assistant":
-                return (
-                  <Text key={key} color="#F8F8F2">
-                    {log.text}
-                  </Text>
-                );
-              case "reasoning":
-                return (
-                  <Text key={key} color="#6272A4" dimColor>
-                    {log.text}
-                  </Text>
-                );
-              case "tool-req":
-                return (
-                  <Text key={key} color="#F1FA8C" dimColor>
-                    {log.text}
-                  </Text>
-                );
-              case "tool-res":
-                return (
-                  <Text key={key} color="#BD93F9" dimColor>
-                    {log.text}
-                  </Text>
-                );
-              case "error":
-                return (
-                  <Text key={key} color="#FF5555">
-                    {log.text}
-                  </Text>
-                );
-            }
-          })}
-        {streamingReasoning !== "" && (
-          <Text color="#6272A4" dimColor>
-            {streamingReasoning}
-          </Text>
-        )}
         {status !== "" && (
           <Text color="#F1FA8C" dimColor>
             {status}
           </Text>
         )}
+        {modelMessages.length > 0 &&
+          // biome-ignore lint/suspicious/useIterableCallbackReturn: ignore
+          modelMessages.map((message, i) => {
+            const text = getMessageText(message.content);
+            if (text === "") return null;
+
+            const key = `${i}`;
+            switch (message.role) {
+              case "user":
+                return (
+                  <Text key={key} color="#50FA7B">
+                    {">"} {text}
+                  </Text>
+                );
+              case "assistant":
+                return (
+                  <Text key={key} color="#F8F8F2">
+                    {text}
+                  </Text>
+                );
+              case "tool":
+                return (
+                  <Text key={key} color="#6272A4" dimColor>
+                    {text}
+                  </Text>
+                );
+            }
+          })}
       </Box>
       <Box paddingX={1}>
         <Text color="#8BE9FD" bold>
